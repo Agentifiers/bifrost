@@ -1795,6 +1795,7 @@ type ChatReasoningDetails struct {
 	Text      *string                     `json:"text,omitempty"`
 	Signature *string                     `json:"signature,omitempty"`
 	Data      *string                     `json:"data,omitempty"` // for encrypted data
+	Format    *string                     `json:"format,omitempty"`
 }
 
 // BifrostLogProbs represents the log probabilities for different aspects of a response.

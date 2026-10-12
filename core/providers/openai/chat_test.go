@@ -1965,9 +1965,6 @@ func TestConvertOpenAIMessagesToBifrostMessages_NormalizesReasoningSpellings(t *
 	}
 }
 
-// TestToOpenAIChatRequest_DoesNotEmitInboundReasoningAliases pins the inbound-only contract
-// on OpenAIChatAssistantMessage: the "reasoning" and "reasoning_details" aliases exist to
-// parse requests and must never appear on the outbound wire for any provider.
 func TestToOpenAIChatRequest_DoesNotEmitInboundReasoningAliases(t *testing.T) {
 	ctx, cancel := schemas.NewBifrostContextWithCancel(nil)
 	defer cancel()
@@ -1975,7 +1972,7 @@ func TestToOpenAIChatRequest_DoesNotEmitInboundReasoningAliases(t *testing.T) {
 	reasoning := "step by step"
 	answer := "It is 12:00 UTC."
 
-	for _, provider := range []schemas.ModelProvider{schemas.OpenAI, schemas.DeepSeek, schemas.XAI} {
+	for _, provider := range []schemas.ModelProvider{schemas.OpenAI, schemas.DeepSeek, schemas.XAI, schemas.Parasail} {
 		t.Run(string(provider), func(t *testing.T) {
 			bifrostReq := &schemas.BifrostChatRequest{
 				Provider: provider,
@@ -2008,9 +2005,54 @@ func TestToOpenAIChatRequest_DoesNotEmitInboundReasoningAliases(t *testing.T) {
 			require.NotContains(t, assistantMessage, "reasoning",
 				"the inbound-only reasoning alias must never be marshalled outbound")
 			require.NotContains(t, assistantMessage, "reasoning_details",
-				"the inbound-only reasoning_details alias must never be marshalled outbound")
+				"reasoning_details is replayed outbound only to OpenRouter")
 		})
 	}
+}
+
+func TestToOpenAIChatRequest_OpenRouterReplaysReasoningDetails(t *testing.T) {
+	ctx, cancel := schemas.NewBifrostContextWithCancel(nil)
+	defer cancel()
+
+	var messages []schemas.ChatMessage
+	require.NoError(t, sonic.Unmarshal([]byte(`[
+		{"role":"user","content":"What time is it?"},
+		{"role":"assistant","reasoning":"step by step","reasoning_details":[
+			{"type":"reasoning.text","text":"step by step","signature":"sig-abc","format":"anthropic-claude-v1","index":0},
+			{"type":"reasoning.encrypted","data":"enc-xyz","id":"rd_1","format":"anthropic-claude-v1","index":1}
+		],"tool_calls":[{"index":0,"type":"function","id":"call_1","function":{"name":"get_time","arguments":"{}"}}]},
+		{"role":"tool","tool_call_id":"call_1","content":"12:00 UTC"},
+		{"role":"assistant","content":"It is 12:00 UTC.","reasoning_content":"the tool answered"},
+		{"role":"user","content":"And in Paris?"},
+		{"role":"assistant","content":"It is 14:00 in Paris.","reasoning_content":"add two hours","reasoning_details":[
+			{"type":"reasoning.text","text":"add two hours","signature":"sig-def","index":0}
+		]},
+		{"role":"user","content":"Thanks."}
+	]`), &messages))
+
+	wireBody, err := sonic.Marshal(ToOpenAIChatRequest(ctx, &schemas.BifrostChatRequest{
+		Provider: schemas.OpenRouter,
+		Model:    "anthropic/claude-sonnet-4.5",
+		Input:    messages,
+	}))
+	require.NoError(t, err)
+
+	var wire struct {
+		Messages json.RawMessage `json:"messages"`
+	}
+	require.NoError(t, sonic.Unmarshal(wireBody, &wire))
+	require.JSONEq(t, `[
+		{"role":"user","content":"What time is it?"},
+		{"role":"assistant","reasoning_details":[
+			{"type":"reasoning.text","text":"step by step","signature":"sig-abc","format":"anthropic-claude-v1","index":0},
+			{"type":"reasoning.encrypted","data":"enc-xyz","id":"rd_1","format":"anthropic-claude-v1","index":1}
+		],"tool_calls":[{"index":0,"type":"function","id":"call_1","function":{"name":"get_time","arguments":"{}"}}]},
+		{"role":"tool","tool_call_id":"call_1","content":"12:00 UTC"},
+		{"role":"assistant","content":"It is 12:00 UTC.","reasoning_content":"the tool answered"},
+		{"role":"user","content":"And in Paris?"},
+		{"role":"assistant","content":"It is 14:00 in Paris.","reasoning_content":"add two hours"},
+		{"role":"user","content":"Thanks."}
+	]`, string(wire.Messages))
 }
 
 // TestXAIReasoningEffortEndToEnd pins reasoning_effort through the FULL conversion
