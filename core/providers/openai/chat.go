@@ -1,6 +1,7 @@
 package openai
 
 import (
+	"slices"
 	"strings"
 
 	"github.com/maximhq/bifrost/core/providers/utils"
@@ -112,6 +113,10 @@ func ToOpenAIChatRequest(ctx *schemas.BifrostContext, bifrostReq *schemas.Bifros
 	case schemas.Groq, schemas.Cerebras:
 		openaiReq.filterOpenAISpecificParameters(caps)
 		openaiReq.renameAssistantReasoningToAlias()
+		return openaiReq
+	case schemas.OpenRouter:
+		openaiReq.filterOpenAISpecificParameters(caps)
+		openaiReq.replayReasoningDetails(bifrostReq.Input)
 		return openaiReq
 	case schemas.XAI:
 		openaiReq.filterOpenAISpecificParameters(caps)
@@ -311,6 +316,21 @@ func (req *OpenAIChatRequest) renameAssistantReasoningToAlias() {
 			assistantMessage.ReasoningAlias = assistantMessage.Reasoning
 		}
 		assistantMessage.Reasoning = nil
+	}
+}
+
+// Only arrays OpenRouter minted carry format on every entry. Bifrost synthesizes unsigned
+// details from plain reasoning, and other providers' converters mint details without format.
+func (req *OpenAIChatRequest) replayReasoningDetails(messages []schemas.ChatMessage) {
+	for i := range messages {
+		source := messages[i].ChatAssistantMessage
+		target := req.Messages[i].OpenAIChatAssistantMessage
+		if source == nil || target == nil || len(source.ReasoningDetails) == 0 ||
+			slices.ContainsFunc(source.ReasoningDetails, func(d schemas.ChatReasoningDetails) bool { return d.Format == nil }) {
+			continue
+		}
+		target.ReasoningDetails = source.ReasoningDetails
+		target.Reasoning = nil
 	}
 }
 
